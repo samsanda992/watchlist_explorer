@@ -3,27 +3,49 @@ import time
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import requests
 
 st.set_page_config(page_title="Watchlist Explorer", layout="centered")
 st.title("Watchlist Explorer")
 st.caption("Six tech stocks, weekly, 2018-2019. Indexed to 1.00 on 2018-01-01.")
 
 
-@st.cache_data
-def load_data():
-     time.sleep(2)  # stand-in for a slow API / database call — delete in a real app
-     wide = px.data.stocks()
-     wide["date"] = pd.to_datetime(wide["date"])
-     long = wide.melt(id_vars="date", var_name="ticker", value_name="price")
-     return long.sort_values(["ticker", "date"])
-
+@st.cache_data(ttl=3600)
+def load_prices(symbol):
+    r = requests.get(
+        "https://www.alphavantage.co/query",
+        params={
+            "function": "TIME_SERIES_DAILY",
+            "symbol": symbol,
+            "apikey": st.secrets["ALPHAVANTAGE_API_KEY"],
+            "outputsize": "compact",
+        },
+        timeout=10,
+    )
+    payload = r.json()
+    series = payload.get("Time Series (Daily)")
+    
+    if series is None:                       # the API answers 200 even when it refuses
+        raise RuntimeError(payload.get("Information") or payload.get("Note") or 
+"Unexpected response")
+    out = (pd.DataFrame(series).T
+             .rename(columns={"4. close": "price"})[["price"]]
+             .astype(float)
+             .rename_axis("date")
+             .reset_index())
+    out["date"] = pd.to_datetime(out["date"])
+    out["ticker"] = symbol
+    return out.sort_values("date")
+@st.cache_data(ttl=3600)
+def load_data(symbols=("AAPL", "MSFT", "IBM")):
+    return pd.concat([load_prices(s) for s in symbols], ignore_index=True)
 df = load_data()
 with st.sidebar:
      st.header("Controls")
      tickers = st.multiselect(
         "Tickers",
         options=sorted(df["ticker"].unique()),
-        default=["AAPL", "MSFT", "AMZN"],
+        default=["AAPL", "MSFT", "IBM"],
      )
 start, end = st.slider(
 "Date range",
